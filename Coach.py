@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from multiprocessing import Pool
 from collections import deque
 from pickle import Pickler, Unpickler
 from random import shuffle
@@ -29,7 +30,7 @@ class Coach():
         self.trainExamplesHistory = []  # history of examples from args.numItersForTrainExamplesHistory latest iterations
         self.skipFirstSelfPlay = False  # can be overriden in loadTrainExamples()
 
-    def executeEpisode(self):
+    def executeEpisode(self, mcts=None):
         """
         This function executes one episode of self-play, starting with player 1.
         As the game is played, each turn is added as a training example to
@@ -50,12 +51,14 @@ class Coach():
         self.curPlayer = 1
         episodeStep = 0
 
+        if mcts == None:
+            mcts = self.mcts
         while True:
             episodeStep += 1
             canonicalBoard = self.game.getCanonicalForm(board, self.curPlayer)
             temp = int(episodeStep < self.args.tempThreshold)
 
-            pi = self.mcts.getActionProb(canonicalBoard, temp=temp)
+            pi = mcts.getActionProb(canonicalBoard, temp=temp)
             sym = self.game.getSymmetries(canonicalBoard, pi)
             for b, p in sym:
                 trainExamples.append([b, self.curPlayer, p, None])
@@ -84,11 +87,8 @@ class Coach():
             if not self.skipFirstSelfPlay or i > 1:
                 iterationTrainExamples = deque([], maxlen=self.args.maxlenOfQueue)
 
-                for _ in tqdm(range(self.args.numEps), desc="Self Play"):
-                    self.mcts = MCTS(self.game, self.nnet, self.args)  # reset search tree
-                    iterationTrainExamples += self.executeEpisode()
-
-                # save the iteration examples to the history 
+                with Pool(self.args.numThreads) as pool:
+                    iterationTrainExamples = [pool.apply_async(self.executeEpisode(), MCTS(self.game, self.nnet, self.args)) for i in range(self.args.numEps)]
                 self.trainExamplesHistory.append(iterationTrainExamples)
 
             if len(self.trainExamplesHistory) > self.args.numItersForTrainExamplesHistory:
